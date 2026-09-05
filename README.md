@@ -1,36 +1,100 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NestyStay frontend
 
-## Getting Started
+This directory is a complete Vite + React TypeScript frontend repository. It
+can be pushed and deployed independently from the backend repository.
 
-First, run the development server:
+## Requirements
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- Node.js 22 or newer
+- npm 10 or newer
+- A reachable NestyStay API
+
+## Local development with the API repository
+
+Install dependencies:
+
+```powershell
+npm ci
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Create `frontend/.env.local`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```env
+VITE_API_BASE_URL=/api
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Start the development server:
 
-## Learn More
+```powershell
+npm run dev -- --host 127.0.0.1 --port 5173
+```
 
-To learn more about Next.js, take a look at the following resources:
+The Vite configuration proxies `/api` to `http://localhost:5019`. Start the
+backend API on that port, or set `VITE_API_BASE_URL` to an absolute API URL:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```env
+VITE_API_BASE_URL=https://api.example.com/api
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+When using an absolute URL, the backend must allow the frontend origin through
+`NESTYSTAY_CORS_ALLOWED_ORIGINS` and configure the shared session-cookie domain.
 
-## Deploy on Vercel
+## Production build
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Copy `.env.production.example` to `.env.production` and replace the values:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```env
+VITE_API_BASE_URL=https://api.example.com/api
+VITE_STRIPE_PUBLIC_KEY=pk_live_your_real_publishable_key
+VITE_GOOGLE_CLIENT_ID=optional_google_client_id
+```
+
+Only public values may be placed in `VITE_*` variables. Never put database
+passwords, session secrets, Stripe secret keys, webhook secrets or provider
+private keys in this file.
+
+Build and preview:
+
+```powershell
+npm run typecheck
+npm run build
+npm run preview -- --host 0.0.0.0 --port 4173
+```
+
+The SPA server must route every application path back to `index.html`. The
+included `Dockerfile` and `nginx.conf` provide the standalone container setup.
+
+Build the container:
+
+```bash
+docker build \
+  --build-arg VITE_API_BASE_URL=https://api.example.com/api \
+  --build-arg VITE_STRIPE_PUBLIC_KEY=pk_live_your_real_publishable_key \
+  --build-arg VITE_GOOGLE_CLIENT_ID= \
+  -t nestystay-frontend:release .
+docker run --rm -p 8080:80 nestystay-frontend:release
+```
+
+The production Stripe publishable key must exist during the Docker build; the
+image does not read Vite variables at container runtime. Build arguments are
+public values and will be present in the browser bundle.
+
+## Verification
+
+```powershell
+npm run lint
+npm test
+npm run build
+npm run test:e2e
+```
+
+After deployment, set `PRODUCTION_BASE_URL` and run the non-destructive smoke
+suite. Use `SMOKE_EMAIL` and `SMOKE_PASSWORD` only through the client secret
+manager for an approved smoke account.
+
+## Claude handoff
+
+Ask Claude to read this file first, preserve the API paths and response shapes,
+keep all secrets out of source control, and run typecheck, tests and build after
+changes. The frontend repository owns browser configuration only; provider
+secret keys belong exclusively in the backend deployment environment.
