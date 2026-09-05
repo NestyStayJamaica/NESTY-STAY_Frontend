@@ -1734,7 +1734,7 @@ export function DirectorySpecPage({ kind, slug, auth }: { kind?: string; slug?: 
       {kind === "Police" && <div className="rounded-card border border-coral/30 bg-coral-tint p-[18px] text-coral-text" role="region" aria-label="Emergency 119"><div className="flex flex-wrap items-center justify-between gap-3"><div><strong className="flex items-center gap-2"><TriangleAlert size={18} /> Emergency? Call 119</strong><p className="m-0 mt-1 text-sm">For immediate danger use Jamaica’s emergency line. Share your location and keep this page open for safety guidance.</p></div><a className="inline-flex min-h-11 items-center gap-2 rounded-pill bg-coral px-5 font-semibold text-white" href="tel:119"><Phone size={16} /> Tap to call 119</a></div><div className="mt-3 flex flex-wrap gap-2 text-xs"><span className="rounded-pill bg-white/70 px-3 py-1.5">Emergency: 119</span><span className="rounded-pill bg-white/70 px-3 py-1.5">Non-emergency: use the directory contacts</span></div></div>}
       {directoryLocked && <div className="rounded-card border border-sand-border bg-cream p-[22px] text-[13px] text-gray-600"><strong>{kind === "Police" ? "Wellness badge access" : `${kind === "Trades" ? "Trusted" : "Verified"} badge access`}</strong><p className="m-0 mt-1">{kind === "Police" ? "Police wellness directory access requires a signed-in host with an active Wellness badge." : `A ${kind === "Trades" ? "Trusted" : "Verified"} badge is required to use this directory.`}</p><div className="mt-3 flex flex-wrap items-center gap-2"><span className="rounded-pill bg-yellow/25 px-3 py-1.5 font-semibold">Upgrade to unlock · from US$49/year</span><AppLink className={buttonClassName("sun")} href="/host/badges">View badge options <ArrowRight size={16} /></AppLink></div></div>}
 
-      {!directoryLocked && !badgePending && <DataGate state={list}>
+      {!directoryLocked && !badgePending && !list.error && <DataGate state={list}>
         {(providers) => {
           const categories = ["All", ...Array.from(new Set(providers.map((provider) => provider.category)))];
           const parishes = ["All", ...Array.from(new Set(providers.map((provider) => provider.parish))).sort()];
@@ -1813,6 +1813,14 @@ export function DirectorySpecPage({ kind, slug, auth }: { kind?: string; slug?: 
           );
         }}
       </DataGate>}
+      {!directoryLocked && !badgePending && list.error && <section className="grid gap-4 rounded-card border border-sand-border bg-cream p-4" aria-label="Directory recovery">
+        <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
+          <Field label="Directory search"><Input aria-label="Directory search" onChange={(event) => setDirectoryQuery(event.target.value)} placeholder="Search providers, services, parish" value={directoryQuery} /></Field>
+          <div className="flex gap-2"><Button aria-pressed={directoryView === "list"} onClick={() => setDirectoryView("list")} variant={directoryView === "list" ? "dark" : "outline"}>List</Button><Button aria-pressed={directoryView === "map"} onClick={() => setDirectoryView("map")} variant={directoryView === "map" ? "dark" : "outline"}><Map size={15} /> Map</Button></div>
+          <Button onClick={list.reload} variant="outline">Retry</Button>
+        </div>
+        <div data-testid={directoryView === "map" ? "directory-map" : "directory-list"} className="rounded-card border border-sand-border bg-white p-5 text-sm text-sand-600" role="status">Directory data is temporarily unavailable. Your search is preserved; try again when the service is back.</div>
+      </section>}
     </div>
   );
 }

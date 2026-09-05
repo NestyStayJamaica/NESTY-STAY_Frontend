@@ -161,8 +161,18 @@ export type PropertyListing = {
   cancellationPolicy: string;
   highlights: string[];
   isArchived?: boolean;
+  isDraft?: boolean;
   minimumNights?: number;
   imageUrl?: string;
+};
+
+export type PropertyRevision = {
+  id: string;
+  propertyId: string;
+  version: number;
+  snapshotJson: string;
+  createdAt: string;
+  createdByUserId?: string | null;
 };
 
 export type PropertyPhotoUpload = {
@@ -1356,6 +1366,16 @@ export const api = {
     request<PropertyListing>(`/properties/${id}/archive`, { method: "POST", token }),
   restoreProperty: (id: string, token: string) =>
     request<PropertyListing>(`/properties/${id}/restore`, { method: "POST", token }),
+  duplicateProperty: (id: string, token: string, title?: string) =>
+    request<PropertyListing>(`/properties/${id}/duplicate`, { method: "POST", token, body: { title } }),
+  bulkArchiveProperties: (propertyIds: string[], token: string, isArchived = true) =>
+    request<PropertyListing[]>("/properties/bulk/archive", { method: "POST", token, body: { propertyIds, isArchived } }),
+  publishProperty: (id: string, token: string) =>
+    request<PropertyListing>(`/properties/${id}/publish`, { method: "POST", token }),
+  getPropertyRevisions: (id: string, token: string) =>
+    request<PropertyRevision[]>(`/properties/${id}/revisions`, { token }),
+  restorePropertyRevision: (id: string, revisionId: string, token: string) =>
+    request<PropertyListing>(`/properties/${id}/revisions/${revisionId}/restore`, { method: "POST", token }),
   deleteProperty: (id: string, token: string) =>
     request<void>(`/properties/${id}`, { method: "DELETE", token }),
   getBookings: (token?: string) =>
