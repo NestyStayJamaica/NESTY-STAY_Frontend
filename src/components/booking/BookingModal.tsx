@@ -30,7 +30,7 @@ export function BookingModal({
 }) {
   const [checkIn, setCheckIn] = useState(isoDate(7));
   const [checkOut, setCheckOut] = useState(isoDate(11));
-  const [documentType, setDocumentType] = useState("01000000");
+  const [documentType, setDocumentType] = useState("GLB03002");
   const [quote, setQuote] = useState<BookingQuote | null>(null);
   const [booking, setBooking] = useState<Booking | null>(null);
   const [isBusy, setIsBusy] = useState(false);
@@ -128,7 +128,7 @@ export function BookingModal({
             {property.guestVerificationEnabled && (
               <Field label="eKYC document" className="form-grid__full">
                 <Select value={documentType} onChange={(event) => setDocumentType(event.target.value)}>
-                  <option value="01000000">Passport</option>
+                  <option value="GLB03002">Passport (global e-passport)</option>
                   <option value="02000000">National ID</option>
                   <option value="03000000">Driver license</option>
                 </Select>
