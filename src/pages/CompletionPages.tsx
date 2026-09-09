@@ -42,7 +42,7 @@ import { StatusChip } from "../components/ui/StatusChip";
 import { Modal } from "../components/ui/Modal";
 import { PageHeader } from "../components/ui/PageHeader";
 import type { AuthController } from "../hooks/useAuth";
-import { api, formatMoney, type AdminCase, type AdminCaseEvidenceUpload, type AdminOperations, type AttachmentUpload, type Booking, type Conversation, type DirectoryProvider, type DirectoryProviderDocument, type Experience, type HostOperations, type HostProfile, type IdentityDocumentUpload, type JournalArticle, type MessageAttachment, type PublicContentPage, type TravelerWorkspace } from "../lib/api";
+import { api, formatMoney, type AdminCase, type AdminCaseEvidenceUpload, type AdminOperations, type AttachmentUpload, type Booking, type Conversation, type DirectoryProvider, type DirectoryProviderDocument, type DirectoryProviderInsights, type Experience, type HostOperations, type HostProfile, type IdentityDocumentUpload, type JournalArticle, type MessageAttachment, type PublicContentPage, type TravelerWorkspace } from "../lib/api";
 import { PatoisPhrase, PatoisToggle } from "../lib/patois";
 import { getStayImage } from "../lib/stayImages";
 import { cx } from "../lib/ui";
@@ -1698,7 +1698,7 @@ export function DirectorySpecPage({ kind, slug, auth }: { kind?: string; slug?: 
       return next;
     });
   }
-  if (slug) return <DataGate state={detail}>{(provider) => provider && <ProviderDetail provider={provider} />}</DataGate>;
+  if (slug) return <DataGate state={detail}>{(provider) => provider && <ProviderDetail provider={provider} auth={auth} />}</DataGate>;
   if (kind === "Provider" || kind === "ProviderDashboard") {
     return <RequireSession auth={auth}>{(session) => <ProviderPortal session={session} mode={kind} />}</RequireSession>;
   }
@@ -1857,6 +1857,10 @@ function ProviderPortal({ session, mode }: { session: NonNullable<AuthController
   const [documents, setDocuments] = useState<string[]>([]);
   const [providerDocuments, setProviderDocuments] = useState<DirectoryProviderDocument[]>([]);
   const [documentUploadBusy, setDocumentUploadBusy] = useState(false);
+  const [insights, setInsights] = useState<DirectoryProviderInsights | null>(null);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
+  const [reviewResponses, setReviewResponses] = useState<Record<string, string>>({});
+  const [quoteResponses, setQuoteResponses] = useState<Record<string, { amount: string; message: string }>>({});
   const [activeStep, setActiveStep] = useState(1);
   const draftKey = `nestyStay.providerDraft.${session.userId}`;
 
@@ -1894,6 +1898,17 @@ function ProviderPortal({ session, mode }: { session: NonNullable<AuthController
     if (!provider?.id) return;
     void api.getM4DirectoryProviderDocuments(provider.id, session.accessToken).then(setProviderDocuments).catch(() => undefined);
   }, [provider?.id, session.accessToken]);
+
+  useEffect(() => {
+    if (!provider?.slug) {
+      setInsights(null);
+      return;
+    }
+    setInsightsError(null);
+    void api.getDirectoryProviderInsights(provider.slug, session.accessToken)
+      .then(setInsights)
+      .catch((caught) => setInsightsError(caught instanceof Error ? caught.message : "Provider analytics are unavailable."));
+  }, [provider?.slug, session.accessToken]);
 
   function update<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -2020,10 +2035,15 @@ function ProviderPortal({ session, mode }: { session: NonNullable<AuthController
             <div className="rounded-field bg-shell p-3 text-sm"><strong>Application status timeline</strong><div className="mt-2 grid gap-1.5"><span>✓ Profile draft</span><span className={provider?.status === "Published" ? "text-success-text" : "text-yellow-700"}>● {provider?.status === "Published" ? "Published" : "Pending admin review"}</span><span className="text-sand-500">○ Renewal reminder after approval</span></div></div>
           </div>
 
-          <div className="flex flex-col gap-3 rounded-card border border-sand-border bg-cream p-[22px]">
-            <div className="text-[13px] font-semibold">Requests and earnings</div>
-            <EmptyState title="No provider jobs or earnings are recorded yet." />
-            <div className="text-xs text-sand-500">Requests, messages, and payouts will appear here when a real platform transaction exists.</div>
+          <div className="flex flex-col gap-3 rounded-card border border-sand-border bg-cream p-[22px]" aria-label="Provider analytics and requests">
+            <div className="flex flex-wrap items-center justify-between gap-2"><div className="text-[13px] font-semibold">Requests and performance</div><span className="text-xs text-sand-500">Owner-scoped live analytics</span></div>
+            {insightsError && <div className="rounded-field bg-coral-tint px-3 py-2 text-xs text-coral-text" role="alert">{insightsError}</div>}
+            {!provider ? <EmptyState title="Save your provider profile to activate analytics." /> : !insights ? <LoadingState label="Loading provider analytics…" /> : <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><div className="rounded-field bg-shell p-3"><strong>{insights.quoteRequests}</strong><span className="mt-1 block text-xs text-sand-600">Quote requests</span></div><div className="rounded-field bg-shell p-3"><strong>{insights.acceptedQuotes}</strong><span className="mt-1 block text-xs text-sand-600">Accepted quotes</span></div><div className="rounded-field bg-shell p-3"><strong>{insights.reviews}</strong><span className="mt-1 block text-xs text-sand-600">Published reviews</span></div><div className="rounded-field bg-shell p-3"><strong>{insights.averageRating ? insights.averageRating.toFixed(1) : "New"}</strong><span className="mt-1 block text-xs text-sand-600">Average rating</span></div></div>
+              <div className="grid gap-2"><strong className="text-xs uppercase tracking-[0.08em] text-sand-500">Quote inbox</strong>{insights.quotes.length === 0 && <p className="m-0 text-xs text-sand-600">No quote requests yet.</p>}{insights.quotes.map((quote) => { const draft = quoteResponses[quote.id] ?? { amount: quote.responseAmount?.toString() ?? "", message: quote.message ?? "" }; return <div className="rounded-field border border-sand-border bg-white p-3 text-xs" key={quote.id}><div className="flex flex-wrap justify-between gap-2"><strong>{quote.scope}</strong><StatusChip value={quote.status} /></div><p className="m-0 mt-1 text-sand-600">Requested {new Date(quote.createdAt).toLocaleDateString()} {quote.budget ? `· Budget ${formatMoney(quote.budget)}` : ""}</p>{quote.status === "PENDING" && <div className="mt-2 grid gap-2 sm:grid-cols-[120px_1fr_auto]"><Input aria-label={`Quote amount ${quote.id}`} inputMode="decimal" placeholder="Amount" value={draft.amount} onChange={(event) => setQuoteResponses((current) => ({ ...current, [quote.id]: { ...draft, amount: event.target.value } }))} /><Input aria-label={`Quote message ${quote.id}`} placeholder="Message" value={draft.message} onChange={(event) => setQuoteResponses((current) => ({ ...current, [quote.id]: { ...draft, message: event.target.value } }))} /><Button onClick={() => void api.respondDirectoryQuote(quote.id, session.accessToken, { status: "ACCEPTED", amount: draft.amount ? Number(draft.amount) : undefined, message: draft.message }).then(() => api.getDirectoryProviderInsights(provider.slug, session.accessToken)).then(setInsights).catch((caught) => setInsightsError(caught instanceof Error ? caught.message : "Quote response failed."))} variant="outline">Respond</Button></div>}</div>; })}</div>
+              <div className="grid gap-2"><strong className="text-xs uppercase tracking-[0.08em] text-sand-500">Review responses</strong>{insights.reviewsList.length === 0 && <p className="m-0 text-xs text-sand-600">No reviews are available to respond to.</p>}{insights.reviewsList.map((review) => <div className="rounded-field border border-sand-border bg-white p-3 text-xs" key={review.id}><div className="flex flex-wrap justify-between gap-2"><strong>{"★".repeat(review.rating)} review</strong><StatusChip value={review.status} /></div><p className="m-0 mt-1 text-sand-600">{review.body}</p>{review.providerResponse ? <p className="m-0 mt-2 border-l-2 border-deep pl-2 text-sand-600">Response: {review.providerResponse}</p> : <div className="mt-2 flex gap-2"><Input aria-label={`Review response ${review.id}`} placeholder="Thank the guest…" value={reviewResponses[review.id] ?? ""} onChange={(event) => setReviewResponses((current) => ({ ...current, [review.id]: event.target.value }))} /><Button disabled={!reviewResponses[review.id]?.trim()} onClick={() => void api.respondDirectoryReview(review.id, session.accessToken, reviewResponses[review.id]).then(() => api.getDirectoryProviderInsights(provider.slug, session.accessToken)).then(setInsights).catch((caught) => setInsightsError(caught instanceof Error ? caught.message : "Review response failed."))} variant="outline">Reply</Button></div>}</div>)}</div>
+            </>}
+            <div className="text-xs text-sand-500">Quote responses, review replies, services and availability remain scoped to this provider account and are recorded in the API audit trail.</div>
           </div>
         </div>
       </div>
@@ -2110,10 +2130,28 @@ function ProviderCard({ provider, isTrades, isFavorite, onToggleFavorite }: { pr
   );
 }
 
-function ProviderDetail({ provider }: { provider: DirectoryProvider }) {
+function ProviderDetail({ provider, auth }: { provider: DirectoryProvider; auth: AuthController }) {
   const isPolice = provider.kind === "Police";
   const isBusiness = provider.kind === "LocalBusiness";
-  return <CompletionShell id="DIR-05" eyebrow={provider.kind} title={provider.name} copy={provider.description}><section className="product-section details-layout"><HeroImage index={3} /><Card className="settings-card"><div className="flex flex-wrap items-center gap-2"><Badge tone="green">{provider.badgeLevel} verified</Badge><span className="text-sm text-sand-600"><Star className="mr-1 inline text-yellow" size={15} /> {provider.rating ? provider.rating.toFixed(1) : "New"} ({provider.reviewCount} reviews)</span></div><p className="flex items-center gap-2"><MapPin size={16} /> {provider.parish}</p><p className="flex items-center gap-2"><ClockIcon /> {provider.availabilitySummary}</p>{(provider.services?.length || provider.openingHours || provider.serviceRadiusKm) && <div className="rounded-field border border-sand-border bg-white p-3 text-sm"><strong>Service details</strong><div className="mt-1 text-sand-600">{provider.services?.join(" · ") || "Services available on request"}</div>{provider.openingHours && <div className="mt-1 text-sand-600">Hours: {provider.openingHours}</div>}{provider.serviceRadiusKm && <div className="mt-1 text-sand-600">Coverage: {provider.serviceRadiusKm} km radius</div>}{provider.emergencyAvailable && <div className="mt-1 font-semibold text-coral-text">Emergency availability</div>}</div>}{isBusiness && <div className="rounded-field bg-shell p-3 text-sm"><strong>Local business essentials</strong><div className="mt-1 flex flex-wrap gap-2 text-sand-600"><span>Opening hours shown on request</span><span>Promotions available</span><span>Accessibility information available</span></div><a className="mt-2 inline-flex items-center gap-1 font-semibold underline" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${provider.name} ${provider.parish}`)}`} rel="noreferrer" target="_blank"><Navigation size={15} /> Get directions</a></div>}{isPolice && <div className="rounded-field bg-coral-tint p-3 text-sm text-coral-text"><strong>Emergency: 119</strong><p className="m-0 mt-1">For immediate danger call <a className="font-bold underline" href="tel:119">119</a>. Use this profile for non-emergency platform contact.</p></div>}<AppLink className={buttonClassName("sun")} href={`/messages?provider=${encodeURIComponent(provider.slug)}`}><MessageSquare size={17} /> Contact provider</AppLink></Card></section></CompletionShell>;
+  const reviews = useAsync(() => api.getDirectoryReviews(provider.slug), [provider.slug]);
+  const [quoteScope, setQuoteScope] = useState("");
+  const [quoteBudget, setQuoteBudget] = useState("");
+  const [reviewBody, setReviewBody] = useState("");
+  const [reviewRating, setReviewRating] = useState("5");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const token = auth.session?.accessToken ?? "";
+  async function submitQuote(event: FormEvent) {
+    event.preventDefault(); setNotice(null); setError(null);
+    try { await api.createDirectoryQuote(provider.slug, token, { scope: quoteScope, budget: quoteBudget ? Number(quoteBudget) : undefined }); setQuoteScope(""); setQuoteBudget(""); setNotice("Quote request sent. The provider will respond in the platform inbox."); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Quote request failed."); }
+  }
+  async function submitReview(event: FormEvent) {
+    event.preventDefault(); setNotice(null); setError(null);
+    try { await api.createDirectoryReview(provider.slug, token, { rating: Number(reviewRating), body: reviewBody }); setReviewBody(""); reviews.reload(); setNotice("Review submitted for moderation."); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Review submission failed."); }
+  }
+  return <CompletionShell id="DIR-05" eyebrow={provider.kind} title={provider.name} copy={provider.description}><section className="product-section details-layout"><HeroImage index={3} /><Card className="settings-card"><div className="flex flex-wrap items-center gap-2"><Badge tone="green">{provider.badgeLevel} verified</Badge><span className="text-sm text-sand-600"><Star className="mr-1 inline text-yellow" size={15} /> {provider.rating ? provider.rating.toFixed(1) : "New"} ({provider.reviewCount} reviews)</span></div><p className="flex items-center gap-2"><MapPin size={16} /> {provider.parish}</p><p className="flex items-center gap-2"><ClockIcon /> {provider.availabilitySummary}</p>{(provider.services?.length || provider.openingHours || provider.serviceRadiusKm) && <div className="rounded-field border border-sand-border bg-white p-3 text-sm"><strong>Service details</strong><div className="mt-1 text-sand-600">{provider.services?.join(" · ") || "Services available on request"}</div>{provider.openingHours && <div className="mt-1 text-sand-600">Hours: {provider.openingHours}</div>}{provider.weeklyHoursJson && <div className="mt-1 text-sand-600">Structured hours configured</div>}{provider.holidayClosuresJson && provider.holidayClosuresJson !== "[]" && <div className="mt-1 text-sand-600">Holiday closures listed</div>}{provider.promotionsJson && provider.promotionsJson !== "[]" && <div className="mt-1 text-sand-600">Current promotions available</div>}{provider.accessibilityInfo && <div className="mt-1 text-sand-600">Accessibility: {provider.accessibilityInfo}</div>}{provider.serviceRadiusKm && <div className="mt-1 text-sand-600">Coverage: {provider.serviceRadiusKm} km radius</div>}{provider.emergencyAvailable && <div className="mt-1 font-semibold text-coral-text">Emergency availability</div>}</div>}{isBusiness && <div className="rounded-field bg-shell p-3 text-sm"><strong>Local business essentials</strong><div className="mt-1 flex flex-wrap gap-2 text-sand-600"><span>Open-now status uses Jamaica time</span><span>Promotions and exceptional closures are shown</span></div><a className="mt-2 inline-flex items-center gap-1 font-semibold underline" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${provider.name} ${provider.parish}`)}`} rel="noreferrer" target="_blank"><Navigation size={15} /> Get directions</a></div>}{isPolice && <div className="rounded-field bg-coral-tint p-3 text-sm text-coral-text"><strong>Emergency: 119</strong><p className="m-0 mt-1">For immediate danger call <a className="font-bold underline" href="tel:119">119</a>. Use this profile for non-emergency platform contact.</p></div>}<AppLink className={buttonClassName("sun")} href={`/messages?provider=${encodeURIComponent(provider.slug)}`}><MessageSquare size={17} /> Contact provider</AppLink></Card></section><section className="product-section grid gap-4 lg:grid-cols-2"><Card><h2 className="m-0 font-display text-2xl">Request a quote</h2>{auth.session ? <form className="mt-3 grid gap-3" onSubmit={submitQuote}><Field label="Work needed"><Textarea required value={quoteScope} onChange={(event) => setQuoteScope(event.target.value)} placeholder="Describe the job, preferred timing and access details" /></Field><Field label="Budget (optional)"><Input inputMode="decimal" min="0" step="0.01" type="number" value={quoteBudget} onChange={(event) => setQuoteBudget(event.target.value)} /></Field><Button type="submit" variant="dark">Send quote request</Button></form> : <p className="text-sm text-sand-600">Sign in to request a quote and keep the conversation in NestyStay.</p>}</Card><Card><h2 className="m-0 font-display text-2xl">Reviews</h2><DataGate state={reviews}>{(items) => items.length ? <div className="mt-3 grid gap-2">{items.map((item) => <div className="rounded-field border border-sand-border p-3" key={item.id}><div className="font-semibold">{"★".repeat(item.rating)} <span className="text-xs text-sand-500">{new Date(item.createdAt).toLocaleDateString()}</span></div><p className="m-0 mt-1 text-sm">{item.body}</p>{item.providerResponse && <p className="m-0 mt-2 border-l-2 border-deep pl-2 text-sm text-sand-600">Provider response: {item.providerResponse}</p>}</div>)}</div> : <p className="mt-3 text-sm text-sand-600">No published reviews yet.</p>}</DataGate>{auth.session && <form className="mt-4 grid gap-3 border-t border-sand-border pt-4" onSubmit={submitReview}><div className="grid gap-3 sm:grid-cols-[120px_1fr]"><Field label="Rating"><Select value={reviewRating} onChange={(event) => setReviewRating(event.target.value)}><option value="5">5 — Excellent</option><option value="4">4 — Good</option><option value="3">3 — Okay</option><option value="2">2 — Poor</option><option value="1">1 — Bad</option></Select></Field><Field label="Your review"><Textarea required value={reviewBody} onChange={(event) => setReviewBody(event.target.value)} /></Field></div><Button type="submit" variant="outline">Submit review</Button></form>}</Card></section>{(notice || error) && <div className="product-section">{notice && <div className="rounded-field bg-success-tint px-4 py-3 text-sm font-semibold text-success-text" role="status">{notice}</div>}{error && <div className="rounded-field bg-coral-tint px-4 py-3 text-sm text-coral-text" role="alert">{error}</div>}</div>}</CompletionShell>;
 }
 
 function ClockIcon() {

@@ -17,6 +17,7 @@ export function TravelerReservations({ view, token }: TravelerReservationsProps)
   const [qrByBooking, setQrByBooking] = useState<Record<string, QrIssueResult | null>>({});
   const [qrImageByBooking, setQrImageByBooking] = useState<Record<string, string | null>>({});
   const [qrError, setQrError] = useState<string | null>(null);
+  const [qrRevokeReason, setQrRevokeReason] = useState("No longer needed");
   const [qrAccessList, setQrAccessList] = useState<QrAccess[]>([]);
   const [qrHistory, setQrHistory] = useState<Record<string, QrHistoryEvent[]>>({});
   const [now, setNow] = useState(() => Date.now());
@@ -88,8 +89,11 @@ export function TravelerReservations({ view, token }: TravelerReservationsProps)
     if (!selectedQr || !selectedBooking) return;
     setQrError(null);
     try {
-      const reason = window.prompt("Why are you revoking this gate pass?", "No longer needed")?.trim();
-      if (!reason) return;
+      const reason = qrRevokeReason.trim();
+      if (!reason) {
+        setQrError("Enter a reason before revoking this gate pass.");
+        return;
+      }
       await api.revokeBookingQr(selectedQr.id, token, reason);
       setQrByBooking((current) => ({ ...current, [selectedBooking.id]: null }));
       setQrImageByBooking((current) => ({ ...current, [selectedBooking.id]: null }));
@@ -193,6 +197,8 @@ export function TravelerReservations({ view, token }: TravelerReservationsProps)
                         <div aria-live="polite">{Math.max(0, new Date(selectedQr.expiresAt).getTime() - now) > 0 ? `Expires in ${Math.floor(Math.max(0, new Date(selectedQr.expiresAt).getTime() - now) / 3600000)}h ${Math.floor((Math.max(0, new Date(selectedQr.expiresAt).getTime() - now) % 3600000) / 60000)}m` : "Expired"}</div>
                         <div className="mt-2 flex flex-wrap gap-2">
                           <a className="btn btn-outline" href={`/gate/qr?token=${encodeURIComponent(selectedQr.token)}&propertyId=${encodeURIComponent(selectedQr.propertyId)}`}>Open gate validator</a>
+                          <label className="sr-only" htmlFor="qr-revoke-reason">Revoke reason</label>
+                          <input id="qr-revoke-reason" className="min-h-10 rounded-field border border-sand-input bg-white px-3" value={qrRevokeReason} onChange={(event) => setQrRevokeReason(event.target.value)} />
                           <Button onClick={() => void revokeQr()} variant="outline">Revoke</Button>
                         </div>
                       </div>

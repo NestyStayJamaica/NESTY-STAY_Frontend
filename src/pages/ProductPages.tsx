@@ -93,6 +93,7 @@ import {
   type WellnessQuote,
   type WellnessReport,
   type WellnessReportPhotoUpload,
+  type WellnessOfficerDocument,
   type WellnessVisit,
 } from "../lib/api";
 
@@ -868,6 +869,8 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
   const [notes, setNotes] = useState("Completed wellness visit. Verified photo evidence attached.");
   const [visits, setVisits] = useState<WellnessVisit[]>([]);
   const [officer, setOfficer] = useState<WellnessOfficer | null>(null);
+  const [officerDocuments, setOfficerDocuments] = useState<WellnessOfficerDocument[]>([]);
+  const [documentUploadBusy, setDocumentUploadBusy] = useState<string | null>(null);
   const [reportUploads, setReportUploads] = useState<WellnessReportPhotoUploadItem[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -947,6 +950,18 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
     void api.getWellnessVisits({}, auth.session.accessToken).then(setVisits).catch(() => undefined);
   }, [auth.session]);
 
+  useEffect(() => {
+    if (!officer) return;
+    void api.getWellnessOfficerDocuments(officer.id, auth.session?.accessToken || undefined).then((items) => {
+      setOfficerDocuments(items);
+      setDocuments((current) => ({
+        governmentId: current.governmentId || items.some((item) => item.documentType === "GOVERNMENT_ID" && item.status === "Uploaded" && item.scanStatus === "Clean"),
+        policeBadge: current.policeBadge || items.some((item) => item.documentType === "POLICE_BADGE" && item.status === "Uploaded" && item.scanStatus === "Clean"),
+        proofOfAddress: current.proofOfAddress || items.some((item) => item.documentType === "PROOF_OF_ADDRESS" && item.status === "Uploaded" && item.scanStatus === "Clean"),
+      }));
+    }).catch(() => undefined);
+  }, [auth.session?.accessToken, officer?.id]);
+
   useEffect(() => () => {
     Object.values(reportUploadControllers.current).forEach((controller) => controller.abort());
   }, []);
@@ -980,17 +995,29 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
     try {
       const uploadFile = await compressWellnessReportPhoto(file);
       const contentType = resolveWellnessReportPhotoContentType(uploadFile);
-      const prepared = await api.prepareWellnessReportPhotoUpload(targetVisitId, auth.session?.accessToken ?? "", {
+      const authToken = auth.session?.accessToken?.trim();
+      const uploadRequest = {
         officerBadgeNumber: badgeNumber,
         fileName: uploadFile.name,
         contentType,
         sizeBytes: uploadFile.size,
-      });
+      };
+      // Cookie-backed sessions intentionally keep the bearer token out of
+      // JavaScript. Use the body-only overload in that case so the browser's
+      // HttpOnly session cookie authenticates the upload.
+      const prepared = authToken
+        ? await api.prepareWellnessReportPhotoUpload(targetVisitId, authToken, uploadRequest)
+        : await api.prepareWellnessReportPhotoUpload(targetVisitId, uploadRequest);
       updateReportUpload(id, { upload: prepared, progress: 5, status: "uploading", error: undefined });
-      const uploaded = await api.uploadWellnessReportPhotoContent(targetVisitId, prepared.id, badgeNumber, auth.session?.accessToken ?? "", uploadFile, {
+      const uploaded = authToken
+        ? await api.uploadWellnessReportPhotoContent(targetVisitId, prepared.id, badgeNumber, authToken, uploadFile, {
         signal: controller.signal,
         onProgress: (progress) => updateReportUpload(id, { progress, status: "uploading" }),
-      });
+          })
+        : await api.uploadWellnessReportPhotoContent(targetVisitId, prepared.id, badgeNumber, uploadFile, {
+            signal: controller.signal,
+            onProgress: (progress) => updateReportUpload(id, { progress, status: "uploading" }),
+          });
       updateReportUpload(id, { upload: uploaded, progress: 100, status: "uploaded", error: undefined });
     } catch (caught) {
       updateReportUpload(id, {
@@ -1041,6 +1068,28 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
   function removeReportPhotoUpload(id: string) {
     reportUploadControllers.current[id]?.abort();
     setReportUploads((items) => items.filter((item) => item.id !== id));
+  }
+
+  async function uploadOfficerDocument(key: keyof typeof documents, documentType: string, file: File) {
+    if (!officer) {
+      setActionError("Submit the onboarding application first, then upload each required document securely.");
+      return;
+    }
+    setDocumentUploadBusy(key);
+    setActionError(null);
+    try {
+      const authToken = auth.session?.accessToken?.trim() || undefined;
+      const prepared = await api.prepareWellnessOfficerDocumentUpload(officer.id, { documentType, fileName: file.name, contentType: file.type, sizeBytes: file.size }, authToken);
+      const uploaded = await api.uploadWellnessOfficerDocumentContent(officer.id, prepared.id, file, authToken);
+      if (uploaded.scanStatus !== "Clean") throw new Error("Document did not pass the safety scan. Choose a valid PDF, JPEG, or PNG.");
+      setDocuments((current) => ({ ...current, [key]: true }));
+      setOfficerDocuments((current) => [uploaded, ...current.filter((item) => item.id !== uploaded.id)]);
+      setNotice(`${documentType.replaceAll("_", " ")} uploaded securely and queued for admin review.`);
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "Document upload failed.");
+    } finally {
+      setDocumentUploadBusy(null);
+    }
   }
 
   /* OFC-01 + OFC-02 (DS v2) — onboarding + visit report share this route.
@@ -1112,9 +1161,9 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
             </div>
             <div className="rounded-field bg-mint-tint px-4 py-3 text-[12.5px] text-mint-text"><Map size={15} className="mr-1 inline" /> Coverage preview: <strong>{parish || "Select a parish"}</strong> · {coverageArea || "Add a coverage area"} · {serviceRadiusKm} km radius. <a className="font-semibold underline" href={`https://www.openstreetmap.org/?mlat=${coverageLatitude}&mlon=${coverageLongitude}#map=12/${coverageLatitude}/${coverageLongitude}`} rel="noreferrer" target="_blank">Open map preview</a></div>
           </>}
-          {onboardingStep === 2 && <div className="flex flex-col gap-3"><div className="text-sm text-gray-600">Upload or confirm the documents an administrator will review. Files are not exposed to hosts.</div>{([ ["governmentId", "Government-issued ID"], ["policeBadge", "JCF badge evidence"], ["proofOfAddress", "Proof of address" ]] as const).map(([key, label]) => <label className="flex min-h-12 cursor-pointer items-center justify-between gap-3 rounded-field border border-sand-border bg-white px-4" key={key}><span className="flex items-center gap-2 text-sm font-semibold"><FileCheck2 size={16} className={documents[key] ? "text-success-text" : "text-sand-500"} />{label}</span><input aria-label={label} checked={documents[key]} className="size-5 accent-deep-hover" onChange={(event) => setDocuments((current) => ({ ...current, [key]: event.target.checked }))} type="checkbox" /></label>)}<div className="rounded-field bg-amber-tint px-4 py-3 text-[12.5px] text-amber-text"><Eye size={15} className="mr-1 inline" /> Admin review uses a side-by-side checklist. Sensitive documents remain role-restricted.</div></div>}
+          {onboardingStep === 2 && <div className="flex flex-col gap-3"><div className="text-sm text-gray-600">Upload the required evidence after submitting your application. Files are validated for type, size, magic bytes, hashed, and kept private from hosts.</div>{([ ["governmentId", "Government-issued ID", "GOVERNMENT_ID"], ["policeBadge", "JCF badge evidence", "POLICE_BADGE"], ["proofOfAddress", "Proof of address", "PROOF_OF_ADDRESS"] ] as const).map(([key, label, documentType]) => <div className="flex flex-col gap-2 rounded-field border border-sand-border bg-white px-4 py-3" key={key}><div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-sm font-semibold"><FileCheck2 size={16} className={documents[key] ? "text-success-text" : "text-sand-500"} />{label}</span><span className="text-xs font-semibold text-sand-500">{documents[key] ? "Uploaded / confirmed" : "Required"}</span></div><label className={buttonClassName("outline", "w-fit cursor-pointer")}><Paperclip size={15} /> Choose PDF/JPEG/PNG<input accept="application/pdf,image/jpeg,image/png" aria-label={`Upload ${label}`} className="sr-only" disabled={!officer || documentUploadBusy !== null} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void uploadOfficerDocument(key, documentType, file); }} type="file" /></label>{officerDocuments.filter((item) => item.documentType === documentType).slice(0, 2).map((item) => <div className="flex flex-wrap items-center gap-2 text-xs text-sand-600" key={item.id}><span>{item.fileName}</span><StatusChip value={item.reviewStatus} /><span>{item.scanStatus}</span></div>)}</div>)}<div className="rounded-field bg-amber-tint px-4 py-3 text-[12.5px] text-amber-text"><Eye size={15} className="mr-1 inline" /> Admin review uses a side-by-side checklist. Sensitive documents remain role-restricted and can be replaced by starting a new upload.</div></div>}
           {onboardingStep === 3 && <div className="flex flex-col gap-3"><div className="text-sm text-gray-600">Set the days and hours you can accept assignments. Times are stored as your local availability window.</div><div className="flex flex-wrap gap-2">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => <label className={`inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-pill border px-3 text-xs font-semibold ${availabilityDays.includes(day) ? "border-deep bg-mint-tint" : "border-sand-input bg-white"}`} key={day}><input checked={availabilityDays.includes(day)} className="sr-only" onChange={() => setAvailabilityDays((current) => current.includes(day) ? current.filter((item) => item !== day) : [...current, day])} type="checkbox" />{availabilityDays.includes(day) && <Check size={13} />}{day}</label>)}</div><div className="grid gap-3 sm:grid-cols-2"><Field label="Available from"><Input type="time" value={availabilityStart} onChange={(event) => setAvailabilityStart(event.target.value)} /></Field><Field label="Available until"><Input type="time" value={availabilityEnd} onChange={(event) => setAvailabilityEnd(event.target.value)} /></Field></div><label className="flex items-start gap-3 rounded-field border border-sand-border bg-white p-3"><input checked={privacyConsent} className="mt-1 size-5 accent-deep-hover" onChange={(event) => setPrivacyConsent(event.target.checked)} type="checkbox" /><span className="text-[12.5px]">I consent to NestyStay securely processing my officer information for verification, assignment, payouts, and audit retention. Hosts see badge ID only.</span></label></div>}
-          <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-sand-500">{draftSavedAt ? `Draft saved ${new Date(draftSavedAt).toLocaleTimeString()}` : "Draft saves automatically"}</span><div className="flex gap-2">{onboardingStep > 1 && <Button onClick={() => setOnboardingStep((step) => step - 1)} type="button" variant="ghost">Back</Button>}{onboardingStep < 3 ? <Button onClick={() => setOnboardingStep((step) => step + 1)} type="button" variant="outline">Continue <ArrowRight size={16} /></Button> : <Button disabled={!privacyConsent || availabilityDays.length === 0 || !documents.governmentId || !documents.policeBadge || !documents.proofOfAddress} type="submit" variant="dark"><BadgeCheck size={17} /> Submit for verification</Button>}</div></div>
+          <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-sand-500">{draftSavedAt ? `Draft saved ${new Date(draftSavedAt).toLocaleTimeString()}` : "Draft saves automatically"}</span><div className="flex gap-2">{onboardingStep > 1 && <Button onClick={() => setOnboardingStep((step) => step - 1)} type="button" variant="ghost">Back</Button>}{onboardingStep < 3 ? <Button onClick={() => setOnboardingStep((step) => step + 1)} type="button" variant="outline">Continue <ArrowRight size={16} /></Button> : <Button disabled={!privacyConsent || availabilityDays.length === 0} type="submit" variant="dark"><BadgeCheck size={17} /> Submit for verification</Button>}</div></div>
           {officer && (
             <div className="flex flex-wrap items-center gap-2 rounded-field bg-shell px-4 py-3 text-[13px]">
               <span className="font-mono font-bold">{officer.badgeNumber}</span>
@@ -1169,12 +1218,15 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
             disabled={uploadedReportPhotoIds.length === 0}
             onClick={() =>
               void runOfficerAction(async () => {
-                if (!auth.session?.accessToken) throw new Error("Sign in with an approved Officer account before submitting a report.");
-                const result = await api.submitWellnessReport(visitId, auth.session?.accessToken ?? "", {
+                const reportRequest = {
                   officerBadgeNumber: badgeNumber,
                   notes: [notes, ...reportUploads.filter((upload) => upload.visitId === visitId.trim() && upload.caption?.trim()).map((upload) => `${upload.file.name}: ${upload.caption!.trim()}`)].join("\nPhoto notes: "),
                   photos: uploadedReportPhotoIds,
-                });
+                };
+                const authToken = auth.session?.accessToken?.trim();
+                const result = authToken
+                  ? await api.submitWellnessReport(visitId, authToken, reportRequest)
+                  : await api.submitWellnessReport(visitId, reportRequest);
                 return `Report submitted. Visit is ${result.visitStatus}; payout is ${result.paymentStatus}.`;
               })
             }
