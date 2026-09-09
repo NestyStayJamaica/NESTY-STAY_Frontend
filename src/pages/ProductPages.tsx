@@ -478,10 +478,12 @@ function WellnessVisitList({
   visits,
   reports = {},
   onCancel,
+  onReschedule,
 }: {
   visits: WellnessVisit[];
   reports?: Record<string, WellnessReport | null>;
   onCancel?: (visit: WellnessVisit) => void;
+  onReschedule?: (visit: WellnessVisit) => void;
 }) {
   if (visits.length === 0) {
     return <EmptyState title="No wellness visits yet." copy="Requested visits will appear here after the backend saves them." />;
@@ -499,7 +501,7 @@ function WellnessVisitList({
               <div>
                 <div className="font-mono text-[13px] font-bold">{visit.officerBadgeNumber ?? "Officer not assigned"}</div>
                 <div className="text-[12.5px] text-gray-600">
-                  {visit.visitType.replace(/([A-Z])/g, " $1").trim()} · {new Date(visit.scheduledAt).toLocaleString()}
+                  {visit.visitType.replace(/([A-Z])/g, " $1").trim()} · {new Date(visit.scheduledAt).toLocaleString()} ({visit.scheduledTimeZone ?? "America/Jamaica"})
                 </div>
               </div>
             </div>
@@ -519,10 +521,13 @@ function WellnessVisitList({
               </button>
             </div>
           )}
-          {onCancel && !["Completed", "Cancelled"].includes(visit.visitStatus) && (
+          {(onCancel || onReschedule) && !["Completed", "Cancelled"].includes(visit.visitStatus) && (
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-shell pt-3">
-              <span className="text-xs text-gray-600">Need a different time? Cancel and request a new slot.</span>
-              <Button onClick={() => onCancel(visit)} variant="ghost"><X size={15} /> Cancel visit</Button>
+              <span className="text-xs text-gray-600">Times use Jamaica time by default. Changes are recorded in the visit timeline.</span>
+              <div className="flex flex-wrap gap-2">
+                {onReschedule && <Button onClick={() => onReschedule(visit)} variant="outline"><CalendarDays size={15} /> Reschedule</Button>}
+                {onCancel && <Button onClick={() => onCancel(visit)} variant="ghost"><X size={15} /> Cancel visit</Button>}
+              </div>
             </div>
           )}
         </div>
@@ -604,6 +609,22 @@ function HostWellnessContent({ auth }: { auth: AuthController }) {
     void runWellnessAction(async () => {
       await api.cancelWellnessVisit(visit.id, auth.session!.accessToken, "Cancelled by host from wellness dashboard.");
       return "Visit cancelled. You can request a new time below.";
+    });
+  }
+
+  function rescheduleVisit(visit: WellnessVisit) {
+    const current = new Date(visit.scheduledAt);
+    const initial = Number.isNaN(current.getTime()) ? defaultWellnessDateTime() : current.toISOString().slice(0, 16);
+    const next = window.prompt("Enter the new date and time (YYYY-MM-DDTHH:mm, Jamaica time):", initial);
+    if (!next) return;
+    const parsed = new Date(next);
+    if (Number.isNaN(parsed.getTime())) {
+      setActionError("Enter a valid date and time.");
+      return;
+    }
+    void runWellnessAction(async () => {
+      await api.rescheduleWellnessVisit(visit.id, auth.session!.accessToken, parsed.toISOString(), "America/Jamaica", "Changed by host from wellness dashboard.");
+      return "Visit rescheduled. All participants will see the updated Jamaica-time slot.";
     });
   }
 
@@ -803,7 +824,7 @@ function HostWellnessContent({ auth }: { auth: AuthController }) {
           <Card><div className="text-xs text-sand-500">Reports</div><strong>{Object.values(reports).filter(Boolean).length}</strong><div className="text-xs text-gray-600">Host-visible submissions</div></Card>
           <Card><div className="text-xs text-sand-500">Calendar</div><strong>{visits.length ? new Date(visits[0].scheduledAt).toLocaleDateString() : "—"}</strong><div className="text-xs text-gray-600">Next saved visit</div></Card>
         </div>
-        <WellnessVisitList onCancel={cancelVisit} visits={visits} reports={reports} />
+        <WellnessVisitList onCancel={cancelVisit} onReschedule={rescheduleVisit} visits={visits} reports={reports} />
       </section>
     </div>
   );
@@ -828,6 +849,9 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
   const [badgeNumber, setBadgeNumber] = useState("NST-OFC-2026");
   const [parish, setParish] = useState("St. Ann");
   const [coverageArea, setCoverageArea] = useState("Ocho Rios");
+  const [coverageLatitude, setCoverageLatitude] = useState(18.4074);
+  const [coverageLongitude, setCoverageLongitude] = useState(-77.1031);
+  const [serviceRadiusKm, setServiceRadiusKm] = useState(25);
   const [isActiveOffDuty, setIsActiveOffDuty] = useState(true);
   const [isRetired, setIsRetired] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(1);
@@ -862,12 +886,15 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
       const saved = window.localStorage.getItem(onboardingDraftKey) ?? window.localStorage.getItem("nestyStay.wellnessOfficerDraft");
       if (!saved) return;
       const draft = JSON.parse(saved) as Partial<{
-        badgeNumber: string; parish: string; coverageArea: string; isActiveOffDuty: boolean; isRetired: boolean;
+        badgeNumber: string; parish: string; coverageArea: string; latitude?: number; longitude?: number; serviceRadiusKm?: number; isActiveOffDuty: boolean; isRetired: boolean;
         documents: typeof documents; availabilityDays: string[]; availabilityStart: string; availabilityEnd: string; privacyConsent: boolean; step: number; savedAt: string;
       }>;
       if (draft.badgeNumber) setBadgeNumber(draft.badgeNumber);
       if (draft.parish) setParish(draft.parish);
       if (draft.coverageArea) setCoverageArea(draft.coverageArea);
+      if (typeof draft.latitude === "number") setCoverageLatitude(draft.latitude);
+      if (typeof draft.longitude === "number") setCoverageLongitude(draft.longitude);
+      if (typeof draft.serviceRadiusKm === "number") setServiceRadiusKm(draft.serviceRadiusKm);
       if (typeof draft.isActiveOffDuty === "boolean") setIsActiveOffDuty(draft.isActiveOffDuty);
       if (typeof draft.isRetired === "boolean") setIsRetired(draft.isRetired);
       if (draft.documents) setDocuments(draft.documents);
@@ -888,10 +915,10 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
   useEffect(() => {
     if (!auth.session || !draftReady || !hasHydratedOnboardingDraft.current) return;
     const savedAt = new Date().toISOString();
-    window.localStorage.setItem(onboardingDraftKey, JSON.stringify({ badgeNumber, parish, coverageArea, isActiveOffDuty, isRetired, documents, availabilityDays, availabilityStart, availabilityEnd, privacyConsent, step: onboardingStep, savedAt }));
-    window.localStorage.setItem("nestyStay.wellnessOfficerDraft", JSON.stringify({ badgeNumber, parish, coverageArea, isActiveOffDuty, isRetired, documents, availabilityDays, availabilityStart, availabilityEnd, privacyConsent, step: onboardingStep, savedAt }));
+    window.localStorage.setItem(onboardingDraftKey, JSON.stringify({ badgeNumber, parish, coverageArea, latitude: coverageLatitude, longitude: coverageLongitude, serviceRadiusKm, isActiveOffDuty, isRetired, documents, availabilityDays, availabilityStart, availabilityEnd, privacyConsent, step: onboardingStep, savedAt }));
+    window.localStorage.setItem("nestyStay.wellnessOfficerDraft", JSON.stringify({ badgeNumber, parish, coverageArea, latitude: coverageLatitude, longitude: coverageLongitude, serviceRadiusKm, isActiveOffDuty, isRetired, documents, availabilityDays, availabilityStart, availabilityEnd, privacyConsent, step: onboardingStep, savedAt }));
     setDraftSavedAt(savedAt);
-  }, [auth.session?.userId, onboardingDraftKey, draftReady, badgeNumber, parish, coverageArea, isActiveOffDuty, isRetired, documents, availabilityDays, availabilityStart, availabilityEnd, privacyConsent, onboardingStep]);
+  }, [auth.session?.userId, onboardingDraftKey, draftReady, badgeNumber, parish, coverageArea, coverageLatitude, coverageLongitude, serviceRadiusKm, isActiveOffDuty, isRetired, documents, availabilityDays, availabilityStart, availabilityEnd, privacyConsent, onboardingStep]);
 
   useEffect(() => {
     const onOnline = () => setIsOffline(false);
@@ -1052,6 +1079,9 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
                 coverageArea,
                 isActiveOffDuty,
                 isRetired,
+                latitude: coverageLatitude,
+                longitude: coverageLongitude,
+                serviceRadiusKm,
                 verificationMetadata: JSON.stringify({ documents, availability: { days: availabilityDays, start: availabilityStart, end: availabilityEnd }, privacyConsent, submittedAt: new Date().toISOString() }),
               });
               setOfficer(result);
@@ -1071,11 +1101,16 @@ export function OfficerWellnessPage({ auth }: { auth: AuthController }) {
               <Field label="Parish"><Input required value={parish} onChange={(event) => setParish(event.target.value)} /></Field>
             </div>
             <Field label="Coverage zone"><Input required placeholder="e.g. Negril — West End to Sheffield" value={coverageArea} onChange={(event) => setCoverageArea(event.target.value)} /></Field>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Coverage latitude"><Input inputMode="decimal" max="90" min="-90" step="any" type="number" value={coverageLatitude} onChange={(event) => setCoverageLatitude(Number(event.target.value))} /></Field>
+              <Field label="Coverage longitude"><Input inputMode="decimal" max="180" min="-180" step="any" type="number" value={coverageLongitude} onChange={(event) => setCoverageLongitude(Number(event.target.value))} /></Field>
+              <Field label="Service radius (km)"><Input max="500" min="1" step="1" type="number" value={serviceRadiusKm} onChange={(event) => setServiceRadiusKm(Number(event.target.value))} /></Field>
+            </div>
             <div className="flex flex-col gap-1">
               <label className="flex min-h-11 cursor-pointer items-center gap-3"><input checked={isActiveOffDuty} className="size-5 accent-deep-hover" onChange={(event) => setIsActiveOffDuty(event.target.checked)} type="checkbox" /><span className="text-sm">Active off-duty JCF officer</span></label>
               <label className="flex min-h-11 cursor-pointer items-center gap-3"><input checked={isRetired} className="size-5 accent-deep-hover" onChange={(event) => setIsRetired(event.target.checked)} type="checkbox" /><span className="text-sm">Retired</span><span className="text-xs font-semibold text-coral-text">— retired officers are automatically rejected</span></label>
             </div>
-            <div className="rounded-field bg-mint-tint px-4 py-3 text-[12.5px] text-mint-text"><Map size={15} className="mr-1 inline" /> Coverage preview: <strong>{parish || "Select a parish"}</strong> · {coverageArea || "Add a coverage area"}. Location data is used for assignment matching only.</div>
+            <div className="rounded-field bg-mint-tint px-4 py-3 text-[12.5px] text-mint-text"><Map size={15} className="mr-1 inline" /> Coverage preview: <strong>{parish || "Select a parish"}</strong> · {coverageArea || "Add a coverage area"} · {serviceRadiusKm} km radius. <a className="font-semibold underline" href={`https://www.openstreetmap.org/?mlat=${coverageLatitude}&mlon=${coverageLongitude}#map=12/${coverageLatitude}/${coverageLongitude}`} rel="noreferrer" target="_blank">Open map preview</a></div>
           </>}
           {onboardingStep === 2 && <div className="flex flex-col gap-3"><div className="text-sm text-gray-600">Upload or confirm the documents an administrator will review. Files are not exposed to hosts.</div>{([ ["governmentId", "Government-issued ID"], ["policeBadge", "JCF badge evidence"], ["proofOfAddress", "Proof of address" ]] as const).map(([key, label]) => <label className="flex min-h-12 cursor-pointer items-center justify-between gap-3 rounded-field border border-sand-border bg-white px-4" key={key}><span className="flex items-center gap-2 text-sm font-semibold"><FileCheck2 size={16} className={documents[key] ? "text-success-text" : "text-sand-500"} />{label}</span><input aria-label={label} checked={documents[key]} className="size-5 accent-deep-hover" onChange={(event) => setDocuments((current) => ({ ...current, [key]: event.target.checked }))} type="checkbox" /></label>)}<div className="rounded-field bg-amber-tint px-4 py-3 text-[12.5px] text-amber-text"><Eye size={15} className="mr-1 inline" /> Admin review uses a side-by-side checklist. Sensitive documents remain role-restricted.</div></div>}
           {onboardingStep === 3 && <div className="flex flex-col gap-3"><div className="text-sm text-gray-600">Set the days and hours you can accept assignments. Times are stored as your local availability window.</div><div className="flex flex-wrap gap-2">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => <label className={`inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-pill border px-3 text-xs font-semibold ${availabilityDays.includes(day) ? "border-deep bg-mint-tint" : "border-sand-input bg-white"}`} key={day}><input checked={availabilityDays.includes(day)} className="sr-only" onChange={() => setAvailabilityDays((current) => current.includes(day) ? current.filter((item) => item !== day) : [...current, day])} type="checkbox" />{availabilityDays.includes(day) && <Check size={13} />}{day}</label>)}</div><div className="grid gap-3 sm:grid-cols-2"><Field label="Available from"><Input type="time" value={availabilityStart} onChange={(event) => setAvailabilityStart(event.target.value)} /></Field><Field label="Available until"><Input type="time" value={availabilityEnd} onChange={(event) => setAvailabilityEnd(event.target.value)} /></Field></div><label className="flex items-start gap-3 rounded-field border border-sand-border bg-white p-3"><input checked={privacyConsent} className="mt-1 size-5 accent-deep-hover" onChange={(event) => setPrivacyConsent(event.target.checked)} type="checkbox" /><span className="text-[12.5px]">I consent to NestyStay securely processing my officer information for verification, assignment, payouts, and audit retention. Hosts see badge ID only.</span></label></div>}
@@ -1565,13 +1600,16 @@ async function compressWellnessReportPhoto(file: File): Promise<File> {
 }
 
 export function CalendarPage({ auth }: { auth: AuthController }) {
-  const propertiesState = useProperties();
+  const propertiesState = useProperties(auth.session?.accessToken);
   const bookingsState = useBookings(auth.session?.accessToken);
   const [propertyId, setPropertyId] = useState("");
   const [checkIn, setCheckIn] = useState(todayPlus(9));
   const [checkOut, setCheckOut] = useState(todayPlus(13));
   const [quote, setQuote] = useState<BookingQuote | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [feeds, setFeeds] = useState<import("../lib/api").CalendarFeed[]>([]);
+  const [feedUrl, setFeedUrl] = useState("");
+  const [feedBusy, setFeedBusy] = useState(false);
 
   useEffect(() => {
     if (!propertyId && propertiesState.properties[0]) {
@@ -1581,6 +1619,11 @@ export function CalendarPage({ auth }: { auth: AuthController }) {
 
   const selectedBookings = bookingsState.bookings.filter((booking) => booking.propertyId === propertyId);
 
+  useEffect(() => {
+    if (!propertyId || !auth.session) return;
+    void api.getCalendarFeeds(propertyId, auth.session.accessToken).then(setFeeds).catch(() => setFeeds([]));
+  }, [auth.session?.accessToken, propertyId]);
+
   async function checkAvailability() {
     setError(null);
     setQuote(null);
@@ -1588,6 +1631,35 @@ export function CalendarPage({ auth }: { auth: AuthController }) {
       setQuote(await api.quoteBooking({ propertyId, checkIn, checkOut }));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Availability could not be checked.");
+    }
+  }
+
+  async function connectFeed() {
+    if (!propertyId || !auth.session || !feedUrl.trim()) return;
+    setFeedBusy(true);
+    setError(null);
+    try {
+      const feed = await api.connectCalendarFeed(propertyId, auth.session.accessToken, feedUrl.trim());
+      setFeeds((current) => [feed, ...current.filter((item) => item.id !== feed.id)]);
+      setFeedUrl("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Calendar feed could not be connected.");
+    } finally {
+      setFeedBusy(false);
+    }
+  }
+
+  async function syncFeed(feed: import("../lib/api").CalendarFeed) {
+    if (!auth.session) return;
+    setFeedBusy(true);
+    setError(null);
+    try {
+      const updated = await api.syncCalendarFeed(propertyId, feed.id, auth.session.accessToken);
+      setFeeds((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Calendar feed could not be synchronized.");
+    } finally {
+      setFeedBusy(false);
     }
   }
 
@@ -1629,6 +1701,11 @@ export function CalendarPage({ auth }: { auth: AuthController }) {
             {formatMoney(quote.totalAmount, quote.currency)}.
           </div>
         )}
+        {auth.session && propertyId && <Card className="settings-card mt-5">
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="m-0 font-display text-xl">External calendar sync</h2><p className="m-0 mt-1 text-sm text-sand-600">Import an ICS feed to block dates and export this property calendar to another service.</p></div><a className="btn btn-outline" href={api.exportCalendarUrl(propertyId)} download={`nesty-${propertyId}.ics`}>Export ICS</a></div>
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row"><Input aria-label="External ICS feed URL" onChange={(event) => setFeedUrl(event.target.value)} placeholder="https://calendar.example.com/property.ics" value={feedUrl} /><Button disabled={feedBusy || !feedUrl.trim()} onClick={() => void connectFeed()}>Connect feed</Button></div>
+          {feeds.length > 0 && <div className="mt-4 space-y-2">{feeds.map((feed) => <div className="flex flex-wrap items-center justify-between gap-2 rounded-field border border-sand-border p-3 text-sm" key={feed.id}><div><strong>{feed.feedUrl}</strong><div className="text-xs text-sand-600">{feed.status} · {feed.blockCount} blocked dates{feed.lastSyncAt ? ` · synced ${new Date(feed.lastSyncAt).toLocaleString()}` : ""}{feed.lastError ? ` · ${feed.lastError}` : ""}</div></div><Button disabled={feedBusy} onClick={() => void syncFeed(feed)} variant="outline">Sync now</Button></div>)}</div>}
+        </Card>}
         <div className="calendar-board">
           {selectedBookings.length === 0 ? (
             <EmptyState title="No persisted bookings for this property." />
@@ -2694,7 +2771,7 @@ export function AdminPage({ auth }: { auth: AuthController }) {
       <section className="grid gap-4 lg:grid-cols-2" aria-label="Wellness review and payouts">
         <Card>
           <div className="flex items-center justify-between gap-3"><h2 className="section-subtitle m-0">Side-by-side application review</h2><Eye size={18} className="text-deep-hover" /></div>
-          {selectedWellnessOfficer ? <div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded-field border border-sand-border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-sand-500">Applicant</div><div className="mt-2 font-mono font-bold">{selectedWellnessOfficer.badgeNumber}</div><div className="mt-1 text-sm">{selectedWellnessOfficer.parish} · {selectedWellnessOfficer.coverageArea}</div><div className="mt-2 flex flex-wrap gap-1.5"><StatusChip value={selectedWellnessOfficer.verificationStatus} /><StatusChip value={selectedWellnessOfficer.availabilityStatus} /></div></div><div className="rounded-field border border-sand-border bg-shell p-4"><div className="text-xs font-bold uppercase tracking-wide text-sand-500">Review checklist</div><div className="mt-2 flex flex-col gap-2 text-sm"><span className="flex items-center gap-2"><Check size={15} className="text-success-text" /> Off-duty eligibility declared</span><span className="flex items-center gap-2"><Check size={15} className="text-success-text" /> Coverage zone recorded</span><span className="flex items-center gap-2"><Lock size={15} className="text-deep-hover" /> Identity documents role-restricted</span></div></div></div> : <EmptyState title="Select an officer" copy="Choose an officer from the live queue to review their application." />}
+          {selectedWellnessOfficer ? <div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded-field border border-sand-border bg-white p-4"><div className="text-xs font-bold uppercase tracking-wide text-sand-500">Applicant</div><div className="mt-2 font-mono font-bold">{selectedWellnessOfficer.badgeNumber}</div><div className="mt-1 text-sm">{selectedWellnessOfficer.parish} · {selectedWellnessOfficer.coverageArea}</div><div className="mt-1 text-xs text-sand-600">Service radius: {selectedWellnessOfficer.serviceRadiusKm ?? "—"} km</div>{selectedWellnessOfficer.latitude != null && selectedWellnessOfficer.longitude != null && <a className="mt-2 inline-flex text-xs font-semibold text-deep-hover underline" href={`https://www.openstreetmap.org/?mlat=${selectedWellnessOfficer.latitude}&mlon=${selectedWellnessOfficer.longitude}#map=12/${selectedWellnessOfficer.latitude}/${selectedWellnessOfficer.longitude}`} rel="noreferrer" target="_blank">Open coverage map</a>}<div className="mt-2 flex flex-wrap gap-1.5"><StatusChip value={selectedWellnessOfficer.verificationStatus} /><StatusChip value={selectedWellnessOfficer.availabilityStatus} /></div></div><div className="rounded-field border border-sand-border bg-shell p-4"><div className="text-xs font-bold uppercase tracking-wide text-sand-500">Review checklist</div><div className="mt-2 flex flex-col gap-2 text-sm"><span className="flex items-center gap-2"><Check size={15} className="text-success-text" /> Off-duty eligibility declared</span><span className="flex items-center gap-2"><Check size={15} className="text-success-text" /> Coverage zone recorded</span><span className="flex items-center gap-2"><Lock size={15} className="text-deep-hover" /> Identity documents role-restricted</span></div></div></div> : <EmptyState title="Select an officer" copy="Choose an officer from the live queue to review their application." />}
           <div className="mt-4 rounded-field bg-amber-tint px-4 py-3 text-[12.5px] text-amber-text"><MessageSquare size={15} className="mr-1 inline" /> Approval/rejection actions queue notification events and persist an audit reason.</div>
         </Card>
         <Card>

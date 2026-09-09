@@ -1161,7 +1161,7 @@ function IdentityPanel({ data, userId, token, reload }: { data: TravelerWorkspac
     <Card className="settings-card identity-document-card">
       <ShieldCheck size={28} />
       <h3>Identity verification</h3>
-      <p>Alibaba eKYC status: Verified / Pending / Action required. Re-verification launches through the protected booking and auth flow.</p>
+      <p>Alibaba eKYC status: Verified / Pending / Action required. Use your camera on mobile or upload a file. Re-verification launches through the protected booking and auth flow.</p>
       <div className="form-grid form-grid--two">
         <Field label="Document type">
           <Select value={documentType} onChange={(event) => setDocumentType(event.target.value)}>
@@ -1180,7 +1180,7 @@ function IdentityPanel({ data, userId, token, reload }: { data: TravelerWorkspac
       <div className="message-upload-bar">
         <label className={buttonClassName("outline", "message-file-picker")}>
           <Paperclip size={17} /> Upload document
-          <input accept="image/jpeg,image/png,image/webp,application/pdf" multiple onChange={(event) => { addFiles(event.currentTarget.files); event.currentTarget.value = ""; }} type="file" />
+          <input accept="image/jpeg,image/png,image/webp,application/pdf" capture="environment" multiple onChange={(event) => { addFiles(event.currentTarget.files); event.currentTarget.value = ""; }} type="file" />
         </label>
       </div>
       {uploads.length > 0 && (
@@ -1659,6 +1659,7 @@ export function DirectorySpecPage({ kind, slug, auth }: { kind?: string; slug?: 
     : (!!auth.session && (!isHost || (!!badgeAccess.data && (badgeRank[badgeAccess.data.activeLevel] ?? 0) < (requiredRank[kind ?? ""] ?? 0)))));
   const list = useAsync(() => kind === "Provider" || kind === "ProviderDashboard" || directoryLocked || badgePending ? Promise.resolve([]) : isM4Directory ? api.getM4DirectoryProviders({ kind }, auth.session?.accessToken) : api.getDirectoryProviders({ kind }), [kind, isM4Directory, directoryLocked, badgePending, auth.session?.accessToken]);
   const detail = useAsync(() => slug && !directoryLocked && !badgePending ? (isM4Directory ? api.getM4DirectoryProvider(slug, auth.session?.accessToken) : api.getDirectoryProvider(slug)) : Promise.resolve(null), [slug, isM4Directory, directoryLocked, badgePending, auth.session?.accessToken]);
+  const recentViews = useAsync(() => auth.session && !slug ? api.getDirectoryRecentViews(auth.session.accessToken) : Promise.resolve([] as DirectoryProvider[]), [auth.session?.accessToken, slug]);
   const [category, setCategory] = useState("All");
   const [directoryQuery, setDirectoryQuery] = useState("");
   const [directorySort, setDirectorySort] = useState("name");
@@ -1669,6 +1670,10 @@ export function DirectorySpecPage({ kind, slug, auth }: { kind?: string; slug?: 
   const [favorites, setFavorites] = useState<string[]>([]);
   const [savedSearches, setSavedSearches] = useState<string[]>([]);
   useEffect(() => setDirectoryPage(0), [category, directoryQuery, directorySort, parish, availabilityOnly]);
+  useEffect(() => {
+    if (!slug || !detail.data || !auth.session) return;
+    void api.recordDirectoryRecentView(detail.data.id, auth.session.accessToken).catch(() => undefined);
+  }, [slug, detail.data?.id, auth.session?.accessToken]);
   useEffect(() => {
     try {
       const stored = JSON.parse(window.localStorage.getItem("nestyStay.directoryFavorites") ?? "[]") as unknown;
@@ -1734,6 +1739,7 @@ export function DirectorySpecPage({ kind, slug, auth }: { kind?: string; slug?: 
       {kind === "Police" && <div className="rounded-card border border-coral/30 bg-coral-tint p-[18px] text-coral-text" role="region" aria-label="Emergency 119"><div className="flex flex-wrap items-center justify-between gap-3"><div><strong className="flex items-center gap-2"><TriangleAlert size={18} /> Emergency? Call 119</strong><p className="m-0 mt-1 text-sm">For immediate danger use Jamaica’s emergency line. Share your location and keep this page open for safety guidance.</p></div><a className="inline-flex min-h-11 items-center gap-2 rounded-pill bg-coral px-5 font-semibold text-white" href="tel:119"><Phone size={16} /> Tap to call 119</a></div><div className="mt-3 flex flex-wrap gap-2 text-xs"><span className="rounded-pill bg-white/70 px-3 py-1.5">Emergency: 119</span><span className="rounded-pill bg-white/70 px-3 py-1.5">Non-emergency: use the directory contacts</span></div></div>}
       {directoryLocked && <div className="rounded-card border border-sand-border bg-cream p-[22px] text-[13px] text-gray-600"><strong>{kind === "Police" ? "Wellness badge access" : `${kind === "Trades" ? "Trusted" : "Verified"} badge access`}</strong><p className="m-0 mt-1">{kind === "Police" ? "Police wellness directory access requires a signed-in host with an active Wellness badge." : `A ${kind === "Trades" ? "Trusted" : "Verified"} badge is required to use this directory.`}</p><div className="mt-3 flex flex-wrap items-center gap-2"><span className="rounded-pill bg-yellow/25 px-3 py-1.5 font-semibold">Upgrade to unlock · from US$49/year</span><AppLink className={buttonClassName("sun")} href="/host/badges">View badge options <ArrowRight size={16} /></AppLink></div></div>}
 
+      {!directoryLocked && !badgePending && auth.session && recentViews.data && recentViews.data.length > 0 && <section className="product-section" aria-label="Recently viewed providers"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><div><h2 className="m-0 font-display text-2xl">Recently viewed</h2><p className="m-0 text-sm text-sand-600">Your private provider history is only visible to you.</p></div><Button variant="outline" onClick={() => void api.clearDirectoryRecentViews(auth.session!.accessToken).then(recentViews.reload).catch(() => undefined)}>Clear history</Button></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{recentViews.data.slice(0, 6).map((provider) => <Card className="p-4" key={provider.id}><strong>{provider.name}</strong><p className="m-0 text-sm text-sand-600">{provider.category} · {provider.parish}</p><div className="mt-2 flex gap-2"><AppLink className={buttonClassName("outline")} href={`/directory/providers/${provider.slug}`}>View</AppLink><Button variant="outline" onClick={() => void api.removeDirectoryRecentView(provider.id, auth.session!.accessToken).then(recentViews.reload).catch(() => undefined)}>Remove</Button></div></Card>)}</div></section>}
       {!directoryLocked && !badgePending && !list.error && <DataGate state={list}>
         {(providers) => {
           const categories = ["All", ...Array.from(new Set(providers.map((provider) => provider.category)))];
@@ -1840,6 +1846,10 @@ function ProviderPortal({ session, mode }: { session: NonNullable<AuthController
     contactMode: provider?.contactMode ?? "Platform messaging only",
     isActive: provider?.isActive ?? false,
     isBrickAndMortar: provider?.isBrickAndMortar ?? true,
+    services: provider?.services?.join(", ") ?? "",
+    openingHours: provider?.openingHours ?? "Mon-Fri 08:00-17:00",
+    emergencyAvailable: provider?.emergencyAvailable ?? false,
+    serviceRadiusKm: provider?.serviceRadiusKm ?? 25,
   });
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1873,6 +1883,10 @@ function ProviderPortal({ session, mode }: { session: NonNullable<AuthController
       contactMode: provider.contactMode,
       isActive: provider.isActive,
       isBrickAndMortar: provider.isBrickAndMortar ?? true,
+      services: provider.services?.join(", ") ?? "",
+      openingHours: provider.openingHours ?? "",
+      emergencyAvailable: provider.emergencyAvailable ?? false,
+      serviceRadiusKm: provider.serviceRadiusKm ?? 25,
     });
   }, [provider]);
 
@@ -1921,7 +1935,7 @@ function ProviderPortal({ session, mode }: { session: NonNullable<AuthController
     setNotice(null);
     setError(null);
     try {
-      const saved = await api.saveM4DirectoryProvider(session.accessToken, { slug, ...form });
+      const saved = await api.saveM4DirectoryProvider(session.accessToken, { slug, ...form, services: form.services.split(",").map((item) => item.trim()).filter(Boolean) });
       setNotice(`${saved.name} is saved for review. ${saved.status ?? "PendingReview"}.`);
       window.localStorage.removeItem(draftKey);
       mine.reload();
@@ -1969,6 +1983,7 @@ function ProviderPortal({ session, mode }: { session: NonNullable<AuthController
             <Field label="Availability"><Input value={form.availabilitySummary} onChange={(event) => update("availabilitySummary", event.target.value)} /></Field>
           </div>
           <Field label="Description"><Textarea value={form.description} onChange={(event) => update("description", event.target.value)} /></Field>
+          <div className="grid gap-3 sm:grid-cols-2"><Field label="Services (comma separated)"><Input placeholder="Cleaning, key handover" value={form.services} onChange={(event) => update("services", event.target.value)} /></Field><Field label="Opening hours"><Input placeholder="Mon-Fri 08:00-17:00" value={form.openingHours} onChange={(event) => update("openingHours", event.target.value)} /></Field><Field label="Service radius (km)"><Input inputMode="decimal" min="1" max="500" type="number" value={form.serviceRadiusKm} onChange={(event) => update("serviceRadiusKm", Number(event.target.value))} /></Field><InlineLabel><input checked={form.emergencyAvailable} type="checkbox" onChange={(event) => update("emergencyAvailable", event.target.checked)} /> Emergency availability</InlineLabel></div>
           <InlineLabel><input checked={form.isBrickAndMortar} type="checkbox" onChange={(event) => update("isBrickAndMortar", event.target.checked)} /> Brick-and-mortar location</InlineLabel>
           <div className="rounded-field border border-sand-border bg-shell p-3 text-xs text-sand-600"><strong>Application checklist</strong><div className="mt-2 grid gap-1.5 sm:grid-cols-2"><span>{form.name.trim() ? "✓" : "○"} Business identity</span><span>{form.parish.trim() ? "✓" : "○"} Service area</span><span>{form.availabilitySummary.trim() ? "✓" : "○"} Availability</span><span>{documents.length ? "✓" : "○"} Supporting documents</span></div></div>
           <Field label="Business documents" hint="PDF, JPEG or PNG; up to 25 MB each. Files are scanned before moderation."><Input accept="application/pdf,image/jpeg,image/png" disabled={documentUploadBusy} multiple onChange={(event) => { attachDocuments(event.target.files); event.currentTarget.value = ""; }} type="file" /></Field>
@@ -2071,6 +2086,7 @@ function ProviderCard({ provider, isTrades, isFavorite, onToggleFavorite }: { pr
         </span>
       </div>
       <div className="text-[13px] text-gray-600">{provider.description}</div>
+      {(provider.services?.length || provider.openingHours || provider.serviceRadiusKm) && <div className="text-xs text-sand-600">{provider.services?.slice(0, 4).join(" · ")}{provider.openingHours ? ` · ${provider.openingHours}` : ""}{provider.serviceRadiusKm ? ` · ${provider.serviceRadiusKm} km radius` : ""}{provider.emergencyAvailable ? " · Emergency availability" : ""}</div>}
       <div className="mt-auto flex flex-wrap items-center justify-between gap-2.5">
         {provider.badgeLevel === "Free" ? (
           <span className="text-[11.5px] text-sand-500">Free listing</span>
@@ -2097,7 +2113,7 @@ function ProviderCard({ provider, isTrades, isFavorite, onToggleFavorite }: { pr
 function ProviderDetail({ provider }: { provider: DirectoryProvider }) {
   const isPolice = provider.kind === "Police";
   const isBusiness = provider.kind === "LocalBusiness";
-  return <CompletionShell id="DIR-05" eyebrow={provider.kind} title={provider.name} copy={provider.description}><section className="product-section details-layout"><HeroImage index={3} /><Card className="settings-card"><div className="flex flex-wrap items-center gap-2"><Badge tone="green">{provider.badgeLevel} verified</Badge><span className="text-sm text-sand-600"><Star className="mr-1 inline text-yellow" size={15} /> {provider.rating ? provider.rating.toFixed(1) : "New"} ({provider.reviewCount} reviews)</span></div><p className="flex items-center gap-2"><MapPin size={16} /> {provider.parish}</p><p className="flex items-center gap-2"><ClockIcon /> {provider.availabilitySummary}</p>{isBusiness && <div className="rounded-field bg-shell p-3 text-sm"><strong>Local business essentials</strong><div className="mt-1 flex flex-wrap gap-2 text-sand-600"><span>Opening hours shown on request</span><span>Promotions available</span><span>Accessibility information available</span></div><a className="mt-2 inline-flex items-center gap-1 font-semibold underline" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${provider.name} ${provider.parish}`)}`} rel="noreferrer" target="_blank"><Navigation size={15} /> Get directions</a></div>}{isPolice && <div className="rounded-field bg-coral-tint p-3 text-sm text-coral-text"><strong>Emergency: 119</strong><p className="m-0 mt-1">For immediate danger call <a className="font-bold underline" href="tel:119">119</a>. Use this profile for non-emergency platform contact.</p></div>}<AppLink className={buttonClassName("sun")} href={`/messages?provider=${encodeURIComponent(provider.slug)}`}><MessageSquare size={17} /> Contact provider</AppLink></Card></section></CompletionShell>;
+  return <CompletionShell id="DIR-05" eyebrow={provider.kind} title={provider.name} copy={provider.description}><section className="product-section details-layout"><HeroImage index={3} /><Card className="settings-card"><div className="flex flex-wrap items-center gap-2"><Badge tone="green">{provider.badgeLevel} verified</Badge><span className="text-sm text-sand-600"><Star className="mr-1 inline text-yellow" size={15} /> {provider.rating ? provider.rating.toFixed(1) : "New"} ({provider.reviewCount} reviews)</span></div><p className="flex items-center gap-2"><MapPin size={16} /> {provider.parish}</p><p className="flex items-center gap-2"><ClockIcon /> {provider.availabilitySummary}</p>{(provider.services?.length || provider.openingHours || provider.serviceRadiusKm) && <div className="rounded-field border border-sand-border bg-white p-3 text-sm"><strong>Service details</strong><div className="mt-1 text-sand-600">{provider.services?.join(" · ") || "Services available on request"}</div>{provider.openingHours && <div className="mt-1 text-sand-600">Hours: {provider.openingHours}</div>}{provider.serviceRadiusKm && <div className="mt-1 text-sand-600">Coverage: {provider.serviceRadiusKm} km radius</div>}{provider.emergencyAvailable && <div className="mt-1 font-semibold text-coral-text">Emergency availability</div>}</div>}{isBusiness && <div className="rounded-field bg-shell p-3 text-sm"><strong>Local business essentials</strong><div className="mt-1 flex flex-wrap gap-2 text-sand-600"><span>Opening hours shown on request</span><span>Promotions available</span><span>Accessibility information available</span></div><a className="mt-2 inline-flex items-center gap-1 font-semibold underline" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${provider.name} ${provider.parish}`)}`} rel="noreferrer" target="_blank"><Navigation size={15} /> Get directions</a></div>}{isPolice && <div className="rounded-field bg-coral-tint p-3 text-sm text-coral-text"><strong>Emergency: 119</strong><p className="m-0 mt-1">For immediate danger call <a className="font-bold underline" href="tel:119">119</a>. Use this profile for non-emergency platform contact.</p></div>}<AppLink className={buttonClassName("sun")} href={`/messages?provider=${encodeURIComponent(provider.slug)}`}><MessageSquare size={17} /> Contact provider</AppLink></Card></section></CompletionShell>;
 }
 
 function ClockIcon() {
